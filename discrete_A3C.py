@@ -53,7 +53,7 @@ class Net(nn.Module):
 
         self.distribution = torch.distributions.Categorical
         self.lstm = nn.LSTMCell(32 * 12 * 16 , 256)
-        self.hx , self.cx = (None, None)
+        self.hxs , self.cxs = (None, None)
 
     def forward(self, x):
         relu = nn.ReLU()
@@ -62,12 +62,18 @@ class Net(nn.Module):
         x = relu(self.conv3(x))
         x = relu(self.conv4(x))
         x = x.view(-1, 32 * 12 * 16 )
-        if self.hx is not None:
-            (self.hx, self.cx) = self.lstm( x, (self.hx, self.cx) )
+        if self.hxs is not None:
+            (hx, cx) = self.lstm( x, (torch.cat(self.hxs[-len(x):],dim=0), torch.cat(self.cxs[-len(x):],dim=0)) )
+            if( len(hx) == 1 ):
+                self.hxs.append(hx)
+                self.cxs.append(cx)
+            
         else:
-            (self.hx, self.cx) = self.lstm( x )
-        print('tata',self.hx.shape)
-        return self.actor(self.hx), self.critic(self.hx)
+            (hx, cx) = self.lstm( x )
+            self.hxs = [ torch.zeros_like(hx), hx ]
+            self.cxs = [ torch.zeros_like(cx), cx ]
+           
+        return self.actor(hx), self.critic(hx)
 
     def choose_action(self, s):
         self.eval()
@@ -102,6 +108,7 @@ class Worker(mp.Process):
         self.lnet = Net(N_S, N_A)           # local network
 
     def run(self):
+        torch.autograd.set_detect_anomaly(True)
         env = retro.make('SonicTheHedgehog-Sms')
         total_step = 1
         while self.g_ep.value < MAX_EP:
@@ -113,8 +120,8 @@ class Worker(mp.Process):
             ep_r = 0.
             while True:
 #                s = np.moveaxis(s,-1,0) #channel first
-                #if self.name == 'w00':
-                 #   env.render()
+                if self.name == 'w00':
+                   env.render()
                 a = self.lnet.choose_action(v_wrap(s[None, :]))
                 titi = np.unpackbits(np.array(a, dtype=np.uint8))
                 s_, r, done, _ = env.step(titi)
@@ -128,6 +135,7 @@ class Worker(mp.Process):
                 if total_step % UPDATE_GLOBAL_ITER == 0 or done:  # update global and assign to local net
                     # sync
                     push_and_pull(self.opt, self.lnet, self.gnet, done, s_, buffer_s, buffer_a, buffer_r, GAMMA)
+                    self.lnet.hxs,self.lnet.cxs = ([self.lnet.hxs[-1]],[self.lnet.cxs[-1]])
                     buffer_s, buffer_a, buffer_r = [], [], []
 
                     if done:  # done and print information
@@ -141,6 +149,7 @@ class Worker(mp.Process):
 
 if __name__ == "__main__":
     #import pdb;pdb.set_trace()
+    torch.autograd.set_detect_anomaly(True)
     mp.set_start_method("spawn")
     gnet = Net(N_S, N_A)         # global network
     gnet.share_memory()         # share the global parameters in multiprocessing
