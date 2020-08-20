@@ -19,7 +19,7 @@ KERNEL_SIZE = 3
 
 env = retro.make('SonicTheHedgehog-Sms')
 N_S = env.observation_space.shape[2]
-N_A = env.action_space.n
+N_A = 2**env.action_space.n
 env.close()
 
 class Net(nn.Module):
@@ -56,21 +56,28 @@ class Net(nn.Module):
         self.hx , self.cx = (None, None)
 
     def forward(self, x):
-        #extracted_features = self.extract_features_net(x)
-        x = nn.ReLU(self.conv1(x))
-        x = nn.ReLU(self.conv2(x))
-        x = nn.ReLU(self.conv3(x))
-        x = nn.ReLU(self.conv4(x))
-        (self.hx, self.cx) = self.lstm( x, (self.hx, self.cx) )
+        relu = nn.ReLU()
+        x = relu(self.conv1(x))
+        x = relu(self.conv2(x))
+        x = relu(self.conv3(x))
+        x = relu(self.conv4(x))
+        x = x.view(-1, 32 * 12 * 16 )
+        if self.hx is not None:
+            (self.hx, self.cx) = self.lstm( x, (self.hx, self.cx) )
+        else:
+            (self.hx, self.cx) = self.lstm( x )
         print('tata',self.hx.shape)
         return self.actor(self.hx), self.critic(self.hx)
 
     def choose_action(self, s):
         self.eval()
         logits, _ = self.forward(s)
-        prob = F.softmax(logits, dim=1).data
-        m = self.distribution(prob)
-        return m.sample().numpy()[0]
+        prob = F.softmax(logits, dim=-1).data
+        #m = self.distribution(prob)
+
+        return prob.multinomial(num_samples=1).detach()
+
+        #return m.sample().numpy()[0]
 
     def loss_func(self, s, a, v_t):
         self.train()
@@ -93,20 +100,25 @@ class Worker(mp.Process):
         self.g_ep, self.g_ep_r, self.res_queue = global_ep, global_ep_r, res_queue
         self.gnet, self.opt = gnet, opt
         self.lnet = Net(N_S, N_A)           # local network
-        self.env = retro.make('SonicTheHedgehog-Sms')
 
     def run(self):
+        env = retro.make('SonicTheHedgehog-Sms')
         total_step = 1
         while self.g_ep.value < MAX_EP:
-            s = self.env.reset()
+            s = env.reset()
+            s = np.moveaxis(s,-1,0) #channel first
+            #s = np.zeros((192, 256, 3))
+
             buffer_s, buffer_a, buffer_r = [], [], []
             ep_r = 0.
             while True:
-                s = np.moveaxis(s,-1,0) #channel first
-                if self.name == 'w00':
-                    self.env.render()
+#                s = np.moveaxis(s,-1,0) #channel first
+                #if self.name == 'w00':
+                 #   env.render()
                 a = self.lnet.choose_action(v_wrap(s[None, :]))
-                s_, r, done, _ = self.env.step(a)
+                titi = np.unpackbits(np.array(a, dtype=np.uint8))
+                s_, r, done, _ = env.step(titi)
+                s_ = np.moveaxis(s_,-1,0) #channel first
                 if done: r = -1
                 ep_r += r
                 buffer_a.append(a)
@@ -124,10 +136,12 @@ class Worker(mp.Process):
                 s = s_
                 total_step += 1
         self.res_queue.put(None)
+        env.close()
 
 
 if __name__ == "__main__":
     #import pdb;pdb.set_trace()
+    mp.set_start_method("spawn")
     gnet = Net(N_S, N_A)         # global network
     gnet.share_memory()         # share the global parameters in multiprocessing
     opt = SharedAdam(gnet.parameters(), lr=1e-4, betas=(0.92, 0.999))      # global optimizer
