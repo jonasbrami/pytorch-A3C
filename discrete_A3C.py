@@ -142,7 +142,7 @@ class Worker(mp.Process):
                     push_and_pull(self.opt, self.lnet, self.gnet, done, s_,
                                   buffer_s, buffer_a, buffer_r, GAMMA, (buffer_hx, buffer_cx))
                     buffer_s, buffer_a, buffer_r, buffer_hx, buffer_cx = [
-                    ], [], [], [buffer_hx[-1]], [buffer_cx[-1]]
+                    ], [], [], [buffer_hx[-1].detach().clone()], [buffer_cx[-1].detach().clone()]
 
                     if done:  # done and print information
                         record(self.g_ep, self.g_ep_r, ep_r,
