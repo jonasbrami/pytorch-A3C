@@ -8,6 +8,8 @@ import gym
 import os
 import retro
 import numpy as np
+import cv2
+
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ['LANG']='en_US'
 
@@ -27,9 +29,11 @@ KERNEL_SIZE = 3
 
 env = retro.make('SonicTheHedgehog-Sms')
 N_S = env.observation_space.shape[2]
-N_A = 2**env.action_space.n
+N_A = env.action_space.n
 env.close()
 
+MAX_EPI_LENGHT = 3000
+IMG_SIZE = (40,40)
 
 class Net(nn.Module):
     def __init__(self, s_dim, a_dim):
@@ -50,7 +54,6 @@ class Net(nn.Module):
         self.conv1 = nn.Conv2d(3, 32, 3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
-        self.conv4 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
 
         self.actor = nn.Sequential(nn.Linear(256, 128),
                                    nn.Tanh(),
@@ -60,7 +63,7 @@ class Net(nn.Module):
                                     nn.Linear(128, 1))
 
         self.distribution = torch.distributions.Categorical
-        self.lstm = nn.LSTMCell(32 * 12 * 16, 256)
+        self.lstm = nn.LSTMCell(32 * 5 * 5, 256)
 
     def forward(self, x, lstm_hx_cx):
         (hxs, cxs) = lstm_hx_cx
@@ -70,11 +73,14 @@ class Net(nn.Module):
         x = relu(self.conv1(x))
         x = relu(self.conv2(x))
         x = relu(self.conv3(x))
-        x = relu(self.conv4(x))
-        x = x.view(-1, 32 * 12 * 16)
+        x = x.view(-1, 32 * 5 * 5)
         if hxs:
-            (hx, cx) = self.lstm(
-                x, (torch.cat(hxs[-len(x):], dim=0), torch.cat(cxs[-len(x):], dim=0)))
+            if len(x) == 1:
+                (hx, cx) = self.lstm(
+                    x, (hxs[-1], cxs[-1]))
+            else:
+                (hx, cx) = self.lstm(
+                    x, (torch.cat(hxs[-(len(x) + 1): -1], dim=0), torch.cat(cxs[-(len(x) + 1): -1], dim=0)))
 
         else:
             (hx, cx) = self.lstm(x)
@@ -119,22 +125,26 @@ class Worker(mp.Process):
         total_step = 1
         while self.g_ep.value < MAX_EP:
             s = env.reset()
+            s = cv2.resize(s, dsize=IMG_SIZE, interpolation=cv2.INTER_LANCZOS4)
             s = np.moveaxis(s, -1, 0)  # channel first
             #s = np.zeros((192, 256, 3))
 
             buffer_s, buffer_a, buffer_r, buffer_hx, buffer_cx = [], [], [], [], []
             ep_r = 0.
             while True:
-                if self.name == 'w00':
-                    env.render()
+                # if self.name == 'w00':
+                #     env.render()
                 a, (hx, cx) = self.lnet.choose_action(
                     v_wrap(s[None, :]), (buffer_hx, buffer_cx))
                 if not buffer_hx:
                     buffer_hx.append(torch.zeros_like(hx))
                     buffer_cx.append(torch.zeros_like(cx))
 
-                actionArray = np.unpackbits(np.array(a.cpu(), dtype=np.uint8))
+                actionArray = np.zeros(N_A)
+                actionArray[a] = 1
                 s_, r, done, _ = env.step(actionArray)
+                s_ = cv2.resize(s_, dsize=IMG_SIZE, interpolation=cv2.INTER_LANCZOS4)
+                print(a)
                 s_ = np.moveaxis(s_, -1, 0)  # channel first
                 if done:
                     r = -1
@@ -145,14 +155,14 @@ class Worker(mp.Process):
                 buffer_hx.append(hx)
                 buffer_cx.append(cx)
 
-                if total_step % UPDATE_GLOBAL_ITER == 0 or done:  # update global and assign to local net
+                if total_step % UPDATE_GLOBAL_ITER == 0 or done or total_step == MAX_EPI_LENGHT:  # update global and assign to local net
                     # sync
                     push_and_pull(self.opt, self.lnet, self.gnet, done, s_,
                                   buffer_s, buffer_a, buffer_r, GAMMA, (buffer_hx, buffer_cx))
                     buffer_s, buffer_a, buffer_r, buffer_hx, buffer_cx = [
                     ], [], [], [buffer_hx[-1].detach().clone()], [buffer_cx[-1].detach().clone()]
 
-                    if done:  # done and print information
+                    if done or total_step == MAX_EPI_LENGHT:  # done and print information
                         record(self.g_ep, self.g_ep_r, ep_r,
                                self.res_queue, self.name)
                         break
