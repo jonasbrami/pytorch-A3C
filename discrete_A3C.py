@@ -53,41 +53,38 @@ class Net(nn.Module):
 
         self.distribution = torch.distributions.Categorical
         self.lstm = nn.LSTMCell(32 * 12 * 16 , 256)
-        self.hxs , self.cxs = (None, None)
 
-    def forward(self, x):
+
+    def forward(self, x, lstm_hx_cx):
+        (hxs, cxs) = lstm_hx_cx
+        
         relu = nn.ReLU()
         x = relu(self.conv1(x))
         x = relu(self.conv2(x))
         x = relu(self.conv3(x))
         x = relu(self.conv4(x))
         x = x.view(-1, 32 * 12 * 16 )
-        if self.hxs is not None:
-            (hx, cx) = self.lstm( x, (torch.cat(self.hxs[-len(x):],dim=0), torch.cat(self.cxs[-len(x):],dim=0)) )
-            if( len(hx) == 1 ):
-                self.hxs.append(hx)
-                self.cxs.append(cx)
-            
+        if hxs:
+            (hx, cx) = self.lstm(x, (torch.cat(hxs[-len(x):],dim=0), torch.cat(cxs[-len(x):],dim=0)) )
+
         else:
             (hx, cx) = self.lstm( x )
-            self.hxs = [ torch.zeros_like(hx), hx ]
-            self.cxs = [ torch.zeros_like(cx), cx ]
            
-        return self.actor(hx), self.critic(hx)
+        return self.actor(hx), self.critic(hx), (hx, cx)
 
-    def choose_action(self, s):
+    def choose_action(self, s, lstm_hx_cx):
         self.eval()
-        logits, _ = self.forward(s)
+        logits, _ , (hx,cx)= self.forward(s, lstm_hx_cx)
         prob = F.softmax(logits, dim=-1).data
         #m = self.distribution(prob)
 
-        return prob.multinomial(num_samples=1).detach()
+        return prob.multinomial(num_samples=1).detach(), (hx,cx)
 
         #return m.sample().numpy()[0]
 
-    def loss_func(self, s, a, v_t):
+    def loss_func(self, s, a, v_t, lstm_hx_cx):
         self.train()
-        logits, values = self.forward(s)
+        logits, values,_ = self.forward(s, lstm_hx_cx)
         td = v_t - values
         c_loss = td.pow(2)
         
@@ -116,27 +113,31 @@ class Worker(mp.Process):
             s = np.moveaxis(s,-1,0) #channel first
             #s = np.zeros((192, 256, 3))
 
-            buffer_s, buffer_a, buffer_r = [], [], []
+            buffer_s, buffer_a, buffer_r,buffer_hx, buffer_cx = [], [], [], [], []
             ep_r = 0.
             while True:
-#                s = np.moveaxis(s,-1,0) #channel first
                 if self.name == 'w00':
                    env.render()
-                a = self.lnet.choose_action(v_wrap(s[None, :]))
-                titi = np.unpackbits(np.array(a, dtype=np.uint8))
-                s_, r, done, _ = env.step(titi)
+                a, (hx,cx) = self.lnet.choose_action(v_wrap(s[None, :]),(buffer_hx,buffer_cx))
+                if not buffer_hx:
+                    buffer_hx.append(torch.zeros_like(hx))
+                    buffer_cx.append(torch.zeros_like(cx))
+
+                actionArray = np.unpackbits(np.array(a, dtype=np.uint8))
+                s_, r, done, _ = env.step(actionArray)
                 s_ = np.moveaxis(s_,-1,0) #channel first
                 if done: r = -1
                 ep_r += r
                 buffer_a.append(a)
                 buffer_s.append(s)
                 buffer_r.append(r)
+                buffer_hx.append(hx)
+                buffer_cx.append(cx)
 
                 if total_step % UPDATE_GLOBAL_ITER == 0 or done:  # update global and assign to local net
                     # sync
-                    push_and_pull(self.opt, self.lnet, self.gnet, done, s_, buffer_s, buffer_a, buffer_r, GAMMA)
-                    self.lnet.hxs,self.lnet.cxs = ([self.lnet.hxs[-1]],[self.lnet.cxs[-1]])
-                    buffer_s, buffer_a, buffer_r = [], [], []
+                    push_and_pull(self.opt, self.lnet, self.gnet, done, s_, buffer_s, buffer_a, buffer_r, GAMMA, (buffer_hx, buffer_cx))
+                    buffer_s, buffer_a, buffer_r,buffer_hx, buffer_cx = [], [], [], [buffer_hx[-1]], [buffer_cx[-1]]
 
                     if done:  # done and print information
                         record(self.g_ep, self.g_ep_r, ep_r, self.res_queue, self.name)
