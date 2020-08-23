@@ -5,6 +5,14 @@ Functions that use multiple times
 from torch import nn
 import torch
 import numpy as np
+import time
+
+use_gpu = lambda x=True: torch.set_default_tensor_type(torch.cuda.FloatTensor 
+                                             if torch.cuda.is_available() and x 
+                                             else torch.FloatTensor)
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+use_gpu()
 
 
 def v_wrap(np_array, dtype=np.float32):
@@ -24,7 +32,7 @@ def push_and_pull(opt, lnet, gnet, done, s_, bs, ba, br, gamma, lstm_hx_cx):
         v_s_ = 0.               # terminal
     else:
         _, v, _ = lnet.forward(v_wrap(s_[None, :]), lstm_hx_cx)
-        v_s_ = v.data.numpy()[0, 0]
+        v_s_ = v.data.cpu().numpy()[0, 0]
 
     buffer_v_target = []
     for r in br[::-1]:    # reverse buffer r
@@ -32,6 +40,8 @@ def push_and_pull(opt, lnet, gnet, done, s_, bs, ba, br, gamma, lstm_hx_cx):
         buffer_v_target.append(v_s_)
     buffer_v_target.reverse()
 
+    for i in range(len(ba)):
+        ba[i] = ba[i].cpu()
     loss = lnet.loss_func(
         v_wrap(np.array(bs)),
         v_wrap(np.array(ba), dtype=np.int64) if ba[0].dtype == np.int64 else v_wrap(
@@ -41,13 +51,18 @@ def push_and_pull(opt, lnet, gnet, done, s_, bs, ba, br, gamma, lstm_hx_cx):
 
     # calculate local gradients and push local parameters to global
     opt.zero_grad()
+
+    # t0 = time.time()
     loss.backward(retain_graph=True)
+    # print('{} seconds'.format(time.time() - t0))
+
     for lp, gp in zip(lnet.parameters(), gnet.parameters()):
         gp._grad = lp.grad
     opt.step()
 
     # pull global parameters
     lnet.load_state_dict(gnet.state_dict())
+
 
 
 def record(global_ep, global_ep_r, ep_r, res_queue, name):

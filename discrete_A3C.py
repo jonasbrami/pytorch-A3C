@@ -11,6 +11,13 @@ import numpy as np
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ['LANG']='en_US'
 
+use_gpu = lambda x=True: torch.set_default_tensor_type(torch.cuda.FloatTensor 
+                                             if torch.cuda.is_available() and x 
+                                             else torch.FloatTensor)
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+use_gpu()
+
 
 UPDATE_GLOBAL_ITER = 5
 GAMMA = 0.9
@@ -57,7 +64,8 @@ class Net(nn.Module):
 
     def forward(self, x, lstm_hx_cx):
         (hxs, cxs) = lstm_hx_cx
-
+        
+        x = x.cuda()
         relu = nn.ReLU()
         x = relu(self.conv1(x))
         x = relu(self.conv2(x))
@@ -86,12 +94,12 @@ class Net(nn.Module):
     def loss_func(self, s, a, v_t, lstm_hx_cx):
         self.train()
         logits, values, _ = self.forward(s, lstm_hx_cx)
-        td = v_t - values
+        td = v_t.cuda() - values
         c_loss = td.pow(2)
 
         probs = F.softmax(logits, dim=1)
         m = self.distribution(probs)
-        exp_v = m.log_prob(a) * td.detach().squeeze()
+        exp_v = m.log_prob(a.cuda()) * td.detach().squeeze()
         a_loss = -exp_v
         total_loss = (c_loss + a_loss).mean()
         return total_loss
@@ -125,7 +133,7 @@ class Worker(mp.Process):
                     buffer_hx.append(torch.zeros_like(hx))
                     buffer_cx.append(torch.zeros_like(cx))
 
-                actionArray = np.unpackbits(np.array(a, dtype=np.uint8))
+                actionArray = np.unpackbits(np.array(a.cpu(), dtype=np.uint8))
                 s_, r, done, _ = env.step(actionArray)
                 s_ = np.moveaxis(s_, -1, 0)  # channel first
                 if done:
