@@ -9,12 +9,13 @@ import os
 import retro
 import numpy as np
 os.environ["OMP_NUM_THREADS"] = "1"
+os.environ['LANG']='en_US'
+
 
 UPDATE_GLOBAL_ITER = 5
 GAMMA = 0.9
 MAX_EP = 3000
-KERNEL_SIZE = 3 
-
+KERNEL_SIZE = 3
 
 
 env = retro.make('SonicTheHedgehog-Sms')
@@ -22,10 +23,11 @@ N_S = env.observation_space.shape[2]
 N_A = 2**env.action_space.n
 env.close()
 
+
 class Net(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Net, self).__init__()
-        
+
         # self.extract_features_net = nn.Sequential(nn.Conv2d(N_S, 32, KERNEL_SIZE, stride=2, padding=1),#torch.Size([1, 3, 192, 256])
         #                                  nn.ReLU(),#torch.Size([1, 32, 96, 128])
         #                                  nn.Conv2d(32, 32, KERNEL_SIZE, stride=2, padding=1),
@@ -34,11 +36,11 @@ class Net(nn.Module):
         #                                  nn.ReLU(),#torch.Size([1, 32, 24, 32])
         #                                  nn.Conv2d(32, 32, KERNEL_SIZE, stride=2, padding=1),
         #                                  nn.ReLU()) #torch.Size([1, 32, 12, 16])
-                                         
+
         self.s_dim = s_dim
         self.a_dim = a_dim
-        
-        self.conv1 = nn.Conv2d(3 , 32, 3, stride=2, padding=1)
+
+        self.conv1 = nn.Conv2d(3, 32, 3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
         self.conv4 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
@@ -49,45 +51,44 @@ class Net(nn.Module):
         self.critic = nn.Sequential(nn.Linear(256, 128),
                                     nn.Tanh(),
                                     nn.Linear(128, 1))
-        
 
         self.distribution = torch.distributions.Categorical
-        self.lstm = nn.LSTMCell(32 * 12 * 16 , 256)
-
+        self.lstm = nn.LSTMCell(32 * 12 * 16, 256)
 
     def forward(self, x, lstm_hx_cx):
         (hxs, cxs) = lstm_hx_cx
-        
+
         relu = nn.ReLU()
         x = relu(self.conv1(x))
         x = relu(self.conv2(x))
         x = relu(self.conv3(x))
         x = relu(self.conv4(x))
-        x = x.view(-1, 32 * 12 * 16 )
+        x = x.view(-1, 32 * 12 * 16)
         if hxs:
-            (hx, cx) = self.lstm(x, (torch.cat(hxs[-len(x):],dim=0), torch.cat(cxs[-len(x):],dim=0)) )
+            (hx, cx) = self.lstm(
+                x, (torch.cat(hxs[-len(x):], dim=0), torch.cat(cxs[-len(x):], dim=0)))
 
         else:
-            (hx, cx) = self.lstm( x )
-           
+            (hx, cx) = self.lstm(x)
+
         return self.actor(hx), self.critic(hx), (hx, cx)
 
     def choose_action(self, s, lstm_hx_cx):
         self.eval()
-        logits, _ , (hx,cx)= self.forward(s, lstm_hx_cx)
+        logits, _, (hx, cx) = self.forward(s, lstm_hx_cx)
         prob = F.softmax(logits, dim=-1).data
         #m = self.distribution(prob)
 
-        return prob.multinomial(num_samples=1).detach(), (hx,cx)
+        return prob.multinomial(num_samples=1).detach(), (hx, cx)
 
-        #return m.sample().numpy()[0]
+        # return m.sample().numpy()[0]
 
     def loss_func(self, s, a, v_t, lstm_hx_cx):
         self.train()
-        logits, values,_ = self.forward(s, lstm_hx_cx)
+        logits, values, _ = self.forward(s, lstm_hx_cx)
         td = v_t - values
         c_loss = td.pow(2)
-        
+
         probs = F.softmax(logits, dim=1)
         m = self.distribution(probs)
         exp_v = m.log_prob(a) * td.detach().squeeze()
@@ -110,23 +111,25 @@ class Worker(mp.Process):
         total_step = 1
         while self.g_ep.value < MAX_EP:
             s = env.reset()
-            s = np.moveaxis(s,-1,0) #channel first
+            s = np.moveaxis(s, -1, 0)  # channel first
             #s = np.zeros((192, 256, 3))
 
-            buffer_s, buffer_a, buffer_r,buffer_hx, buffer_cx = [], [], [], [], []
+            buffer_s, buffer_a, buffer_r, buffer_hx, buffer_cx = [], [], [], [], []
             ep_r = 0.
             while True:
                 if self.name == 'w00':
-                   env.render()
-                a, (hx,cx) = self.lnet.choose_action(v_wrap(s[None, :]),(buffer_hx,buffer_cx))
+                    env.render()
+                a, (hx, cx) = self.lnet.choose_action(
+                    v_wrap(s[None, :]), (buffer_hx, buffer_cx))
                 if not buffer_hx:
                     buffer_hx.append(torch.zeros_like(hx))
                     buffer_cx.append(torch.zeros_like(cx))
 
                 actionArray = np.unpackbits(np.array(a, dtype=np.uint8))
                 s_, r, done, _ = env.step(actionArray)
-                s_ = np.moveaxis(s_,-1,0) #channel first
-                if done: r = -1
+                s_ = np.moveaxis(s_, -1, 0)  # channel first
+                if done:
+                    r = -1
                 ep_r += r
                 buffer_a.append(a)
                 buffer_s.append(s)
@@ -136,11 +139,14 @@ class Worker(mp.Process):
 
                 if total_step % UPDATE_GLOBAL_ITER == 0 or done:  # update global and assign to local net
                     # sync
-                    push_and_pull(self.opt, self.lnet, self.gnet, done, s_, buffer_s, buffer_a, buffer_r, GAMMA, (buffer_hx, buffer_cx))
-                    buffer_s, buffer_a, buffer_r,buffer_hx, buffer_cx = [], [], [], [buffer_hx[-1]], [buffer_cx[-1]]
+                    push_and_pull(self.opt, self.lnet, self.gnet, done, s_,
+                                  buffer_s, buffer_a, buffer_r, GAMMA, (buffer_hx, buffer_cx))
+                    buffer_s, buffer_a, buffer_r, buffer_hx, buffer_cx = [
+                    ], [], [], [buffer_hx[-1]], [buffer_cx[-1]]
 
                     if done:  # done and print information
-                        record(self.g_ep, self.g_ep_r, ep_r, self.res_queue, self.name)
+                        record(self.g_ep, self.g_ep_r, ep_r,
+                               self.res_queue, self.name)
                         break
                 s = s_
                 total_step += 1
@@ -154,11 +160,14 @@ if __name__ == "__main__":
     mp.set_start_method("spawn")
     gnet = Net(N_S, N_A)         # global network
     gnet.share_memory()         # share the global parameters in multiprocessing
-    opt = SharedAdam(gnet.parameters(), lr=1e-4, betas=(0.92, 0.999))      # global optimizer
-    global_ep, global_ep_r, res_queue = mp.Value('i', 0), mp.Value('d', 0.), mp.Queue()
+    opt = SharedAdam(gnet.parameters(), lr=1e-4,
+                     betas=(0.92, 0.999))      # global optimizer
+    global_ep, global_ep_r, res_queue = mp.Value(
+        'i', 0), mp.Value('d', 0.), mp.Queue()
 
     # parallel training
-    workers = [Worker(gnet, opt, global_ep, global_ep_r, res_queue, i) for i in range(1)]
+    workers = [Worker(gnet, opt, global_ep, global_ep_r, res_queue, i)
+               for i in range(1)]
     [w.start() for w in workers]
     res = []                    # record episode reward to plot
     while True:
