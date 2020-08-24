@@ -4,6 +4,14 @@ Shared optimizer, the parameters in the optimizer will shared in the multiproces
 
 import torch
 
+def use_gpu(x=True): return torch.set_default_tensor_type(torch.cuda.FloatTensor
+                                                          if torch.cuda.is_available() and x
+                                                          else torch.FloatTensor)
+
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+use_gpu()
 
 class SharedAdam(torch.optim.Adam):
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.99), eps=1e-8,
