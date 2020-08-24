@@ -26,7 +26,7 @@ use_gpu()
 
 UPDATE_GLOBAL_ITER = 5
 GAMMA = 0.9
-MAX_EP = 3000
+MAX_EP = 5000
 KERNEL_SIZE = 3
 NUM_WORKERS = 4
 ENV = 'PongDeterministic-v4'
@@ -141,8 +141,8 @@ class Worker(mp.Process):
 
             time0 = time.time()
             while True:
-                if self.name == 'w00':
-                    env.render()
+                # if self.name == 'w00':
+                #     env.render()
                 a, (hx, cx) = self.lnet.choose_action(
                     v_wrap(s[None, :]), (buffer_hx, buffer_cx))
                 if not buffer_hx:
