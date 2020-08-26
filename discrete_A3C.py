@@ -24,12 +24,12 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 use_gpu()
 
 
-UPDATE_GLOBAL_ITER = 5
+UPDATE_GLOBAL_ITER = 20
 GAMMA = 0.9
-MAX_EP = 5000
+MAX_EP = 100000
 KERNEL_SIZE = 3
 NUM_WORKERS = 4
-ENV = 'PongDeterministic-v4'
+ENV = 'Breakout-v0' 
 #'PongDeterministic-v4'
 # 'SonicTheHedgehog-Sms'
 
@@ -63,15 +63,15 @@ class Net(nn.Module):
         self.conv2 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(32, 32, 3, stride=2, padding=1)
 
-        self.actor = nn.Sequential(nn.Linear(256, 128),
-                                   nn.Tanh(),
+        self.actor = nn.Sequential(#nn.Linear(256, 128),
+                                   #nn.Tanh(),
                                    nn.Linear(128, a_dim))
-        self.critic = nn.Sequential(nn.Linear(256, 128),
-                                    nn.Tanh(),
+        self.critic = nn.Sequential(#nn.Linear(256, 128),
+                                    #nn.Tanh(),
                                     nn.Linear(128, 1))
 
         self.distribution = torch.distributions.Categorical
-        self.lstm = nn.LSTMCell(32 * 5 * 7, 256)
+        self.lstm = nn.LSTMCell(32 * 5 * 7, 128)#256)
 
     def forward(self, x, lstm_hx_cx):
         (hxs, cxs) = lstm_hx_cx
@@ -96,11 +96,8 @@ class Net(nn.Module):
         self.eval()
         logits, _, (hx, cx) = self.forward(s, lstm_hx_cx)
         prob = F.softmax(logits, dim=-1).data
-        #m = self.distribution(prob)
-
         return prob.multinomial(num_samples=1).detach(), (hx, cx)
 
-        # return m.sample().numpy()[0]
 
     def loss_func(self, s, a, v_t, lstm_hx_cx):
         self.train()
@@ -157,6 +154,9 @@ class Worker(mp.Process):
                 s_ = cv2.resize(s_, IMG_SIZE2)
 
                 s_ = np.moveaxis(s_, -1, 0)  # channel first
+                
+                done = done or total_step == MAX_EPI_LENGHT
+
                 if done:
                     r = -1
                 ep_r += r
@@ -166,13 +166,13 @@ class Worker(mp.Process):
                 buffer_hx.append(hx)
                 buffer_cx.append(cx)
 
-                if total_step % UPDATE_GLOBAL_ITER == 0 or done or total_step == MAX_EPI_LENGHT:
+                if total_step % UPDATE_GLOBAL_ITER == 0 or done:
                     push_and_pull(self.opt, self.lnet, self.gnet, done, s_,
                                   buffer_s, buffer_a, buffer_r, GAMMA, (buffer_hx, buffer_cx))
                     buffer_s, buffer_a, buffer_r, buffer_hx, buffer_cx = [
                     ], [], [], [buffer_hx[-1].detach().clone()], [buffer_cx[-1].detach().clone()]
 
-                    if done or total_step == MAX_EPI_LENGHT:
+                    if done:
                         record(self.g_ep, self.g_ep_r, ep_r,
                                self.res_queue, self.name)
                         print("Epoch duration: " +
