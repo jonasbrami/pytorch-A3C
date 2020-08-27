@@ -14,6 +14,7 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 use_gpu()
 
+CHECK_PATH = "./checkpoints/model.pt"
 
 def v_wrap(np_array, dtype=np.float32):
     if np_array.dtype != dtype:
@@ -80,3 +81,17 @@ def record(global_ep, global_ep_r, ep_r, res_queue, name):
         "Ep:", global_ep.value,
         "| Ep_r: %.0f" % ep_r#global_ep_r.value,
     )
+
+
+def save_checkpoint(model, opt, epoch):
+    torch.save({   
+                'epoch' : epoch,
+                'model_state_dict' : model.state_dict(),
+                'opt_state_dict': opt.state_dict()
+                }, CHECK_PATH)
+
+def load_checkpoint(model, opt, global_ep):
+    checkpoint = torch.load(CHECK_PATH)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    opt.load_state_dict(checkpoint['opt_state_dict'])
+    global_ep.value = checkpoint['epoch']
