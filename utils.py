@@ -27,11 +27,11 @@ def set_init(layers):
         nn.init.constant_(layer.bias, 0.)
 
 
-def push_and_pull(opt, lnet, gnet, done, s_, bs, ba, br, gamma, lstm_hx_cx):
+def push_and_pull(opt, lnet, gnet, done, s_, bs, ba, br, gamma, buffer_loss_w0):
     if done:
         v_s_ = 0.               # terminal
     else:
-        _, v, _ = lnet.forward(v_wrap(s_[None, :]), lstm_hx_cx)
+        _, v = lnet.forward(v_wrap(s_[None, :]))
         v_s_ = v.data[0,0] #.cpu().numpy()[0, 0]
 
     buffer_v_target = []
@@ -46,8 +46,9 @@ def push_and_pull(opt, lnet, gnet, done, s_, bs, ba, br, gamma, lstm_hx_cx):
         # v_wrap(np.array(ba), dtype=np.int64) if ba[0].dtype == np.int64 else v_wrap(
         #     np.vstack(ba)),
         torch.stack(ba),
-        v_wrap(np.array(buffer_v_target)[:, None]),
-        lstm_hx_cx)
+        v_wrap(np.array(buffer_v_target)[:, None]))
+    if buffer_loss_w0 is not None:   
+        buffer_loss_w0.append(loss.detach())
 
     # calculate local gradients and push local parameters to global
     opt.zero_grad()
