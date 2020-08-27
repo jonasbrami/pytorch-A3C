@@ -6,6 +6,7 @@ from torch import nn
 import torch
 import numpy as np
 import time
+from os import path
 
 use_gpu = lambda x=True: torch.set_default_tensor_type(torch.cuda.FloatTensor 
                                              if torch.cuda.is_available() and x 
@@ -91,7 +92,8 @@ def save_checkpoint(model, opt, epoch):
                 }, CHECK_PATH)
 
 def load_checkpoint(model, opt, global_ep):
-    checkpoint = torch.load(CHECK_PATH)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    opt.load_state_dict(checkpoint['opt_state_dict'])
-    global_ep.value = checkpoint['epoch']
+    if path.exists(CHECK_PATH):
+        checkpoint = torch.load(CHECK_PATH)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        opt.load_state_dict(checkpoint['opt_state_dict'])
+        global_ep.value = checkpoint['epoch']
