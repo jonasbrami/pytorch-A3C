@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from utils import v_wrap, set_init, push_and_pull, record
+from utils import *
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 from shared_adam import SharedAdam
@@ -32,6 +32,7 @@ NUM_WORKERS = 4
 ENV = 'Breakout-v0' 
 #'PongDeterministic-v4'
 # 'SonicTheHedgehog-Sms'
+
 
 env = gym.make(ENV)
 res = env.observation_space.shape
@@ -121,6 +122,9 @@ class Worker(mp.Process):
         self.gnet, self.opt = gnet, opt
         self.lnet = Net(N_S, N_A)           # local network
 
+        #WORKER NEEDS TO PULL THE GLOBAL
+        self.lnet.load_state_dict(gnet.state_dict())
+
     def run(self):
         # torch.autograd.set_detect_anomaly(True)
         env = gym.make(ENV)
@@ -177,6 +181,12 @@ class Worker(mp.Process):
                                self.res_queue, self.name)
                         print("Epoch duration: " +
                               str(time.time()-time0) + " seconds")
+
+                        #IF WORKER 0 AND LOSS IS SMALLER
+                        if self.name == 'w00':
+                            #SAVE MODEL TO CHECKPOINT
+                            save_checkpoint(self.gnet, self.opt, self.g_ep)
+
                         break
                 s = s_
                 total_step += 1
@@ -194,6 +204,11 @@ if __name__ == "__main__":
     #  betas=(0.92, 0.999))
     global_ep, global_ep_r, res_queue = mp.Value(
         'i', 0), mp.Value('d', 0.), mp.Queue()
+
+
+    #LOAD MODEL FROM CHECKPOINT
+    load_checkpoint(gnet, opt, global_ep)
+
 
     # parallel training
     workers = [Worker(gnet, opt, global_ep, global_ep_r, res_queue, i)
