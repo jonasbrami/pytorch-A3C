@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from utils import *
+from utils import v_wrap, set_init, push_and_pull, record
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 from shared_adam import SharedAdam
@@ -10,7 +10,7 @@ import retro
 import numpy as np
 import cv2
 import time
-os.environ["OMP_NUM_THREADS"] = "12"
+os.environ["OMP_NUM_THREADS"] = "1"
 os.environ['LANG'] = 'en_US'
 
 
@@ -26,13 +26,12 @@ use_gpu()
 
 UPDATE_GLOBAL_ITER = 50
 GAMMA = 0.9
-MAX_EP = 100000
+MAX_EP = 10000000
 KERNEL_SIZE = 3
 NUM_WORKERS = 4
-ENV = 'Breakout-v0' 
-#'PongDeterministic-v4'
+ENV = 'PongDeterministic-v4'
+#'Breakout-v0' 
 # 'SonicTheHedgehog-Sms'
-
 
 env = gym.make(ENV)
 res = env.observation_space.shape
@@ -49,25 +48,25 @@ class Net(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Net, self).__init__()
 
-        self.extract_features_net = nn.Sequential(nn.Conv2d(N_S, 16, KERNEL_SIZE, stride=2, padding=1),#torch.Size([1, 3, 192, 256])
+        self.extract_features_net = nn.Sequential(nn.Conv2d(N_S, 32, 3, stride=2, padding=1),#torch.Size([1, 3, 192, 256])
                                          nn.ReLU(),#torch.Size([1, 32, 96, 128])
-                                         nn.Conv2d(16, 32, KERNEL_SIZE, stride=2, padding=1),
-                                         nn.ReLU(),#torch.Size([1, 32, 48, 64])
-                                         nn.MaxPool2d(2, stride=2),
-                                         nn.Conv2d(32, 64, 2, stride=2, padding=1),
+                                         nn.Conv2d(32, 32, 3, stride=2, padding=1),
+                                         nn.ReLU(),#torch.Size([1, 32, 48, 64]),
+                                         nn.Conv2d(32, 32, 3, stride=2, padding=1),
                                          nn.ReLU(),
-                                         nn.MaxPool2d(3, stride=2)
-        )
+                                         nn.Conv2d(32, 32, 3, stride=2, padding=1),
+                                         nn.ReLU()
+                                                 )
         
         self.s_dim = s_dim
         self.a_dim = a_dim
 
-        self.actor = nn.Sequential(#nn.Linear(256, 128),
-                                   #nn.Tanh(),
-                                   nn.Linear(64, a_dim))
-        self.critic = nn.Sequential(#nn.Linear(256, 128),
-                                    #nn.Tanh(),
-                                    nn.Linear(64, 1))
+        self.actor = nn.Sequential(nn.Linear(32*3*4, 128),
+                                   nn.Tanh(),
+                                   nn.Linear(128, a_dim))
+        self.critic = nn.Sequential(nn.Linear(32*3*4, 128),
+                                    nn.Tanh(),
+                                    nn.Linear(128, 1))
 
         self.distribution = torch.distributions.Categorical
         self.lstm = nn.LSTMCell(32 * 5 * 7, 128)#256)
@@ -76,7 +75,7 @@ class Net(nn.Module):
 
         x = x.cuda()
         x = self.extract_features_net(x)
-        x = x.view(-1, 64)
+        x = x.view(-1, 32*3*4)
         
         return self.actor(x), self.critic(x)
 
@@ -110,9 +109,6 @@ class Worker(mp.Process):
         self.gnet, self.opt = gnet, opt
         self.lnet = Net(N_S, N_A)           # local network
 
-        #WORKER NEEDS TO PULL THE GLOBAL
-        self.lnet.load_state_dict(gnet.state_dict())
-
     def run(self):
         # torch.autograd.set_detect_anomaly(True)
         env = gym.make(ENV)
@@ -126,6 +122,7 @@ class Worker(mp.Process):
             s = cv2.resize(s, IMG_SIZE1)
             s = cv2.resize(s, IMG_SIZE2)
             s = np.moveaxis(s, -1, 0)  # channel first
+            s = s * (1.0 / 255.0)
             #s = np.zeros((192, 256, 3))
 
             buffer_s, buffer_a, buffer_r= [], [], []
@@ -147,6 +144,7 @@ class Worker(mp.Process):
                 s_ = cv2.resize(s_, IMG_SIZE2)
 
                 s_ = np.moveaxis(s_, -1, 0)  # channel first
+                s_ = s_ * (1.0 / 255.0)
                 
                 done = done or total_step == MAX_EPI_LENGHT
 
@@ -171,12 +169,6 @@ class Worker(mp.Process):
                                self.res_queue, self.name)
                         print("Epoch duration: " +
                               str(time.time()-time0) + " seconds")
-
-                        #IF WORKER 0 AND LOSS IS SMALLER
-                        if self.name == 'w00':
-                            #SAVE MODEL TO CHECKPOINT
-                            save_checkpoint(self.gnet, self.opt, self.g_ep)
-
                         break
                 s = s_
                 total_step += 1
@@ -190,15 +182,11 @@ if __name__ == "__main__":
     mp.set_start_method("spawn")
     gnet = Net(N_S, N_A)
     gnet.share_memory()
-    opt = SharedAdam(gnet.parameters())  # , lr=1e-4,
-    #  betas=(0.92, 0.999))
+    opt = SharedAdam(gnet.parameters(), lr=1e-4, betas=(0.92, 0.999) )  # , lr=1e-4,
+    #  )
+    opt.share_memory()
     global_ep, global_ep_r, res_queue = mp.Value(
         'i', 0), mp.Value('d', 0.), mp.Queue()
-
-
-    #LOAD MODEL FROM CHECKPOINT
-    load_checkpoint(gnet, opt, global_ep)
-
 
     # parallel training
     workers = [Worker(gnet, opt, global_ep, global_ep_r, res_queue, i)
