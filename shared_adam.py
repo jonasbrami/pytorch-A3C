@@ -7,11 +7,11 @@ import math
 import torch.optim as optim
 
 def use_gpu(x=True): return torch.set_default_tensor_type(torch.cuda.FloatTensor
-                                                          if torch.cuda.is_available() and x
+                                                          if torch.cuda.is_available() and x and False
                                                           else torch.FloatTensor)
 
 
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() and False else 'cpu')
 
 use_gpu()
 

@@ -15,11 +15,11 @@ os.environ['LANG'] = 'en_US'
 
 
 def use_gpu(x=True): return torch.set_default_tensor_type(torch.cuda.FloatTensor
-                                                          if torch.cuda.is_available() and x
+                                                          if torch.cuda.is_available() and x and False
                                                           else torch.FloatTensor)
 
 
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() and False else 'cpu')
 
 use_gpu()
 
@@ -28,7 +28,7 @@ UPDATE_GLOBAL_ITER = 50
 GAMMA = 0.9
 MAX_EP = 10000000
 KERNEL_SIZE = 3
-NUM_WORKERS = 4
+NUM_WORKERS = 10
 ENV = 'PongDeterministic-v4'
 #'Breakout-v0' 
 # 'SonicTheHedgehog-Sms'
@@ -73,7 +73,6 @@ class Net(nn.Module):
 
     def forward(self, x):
 
-        x = x.cuda()
         x = self.extract_features_net(x)
         x = x.view(-1, 32*3*4)
         
@@ -89,12 +88,12 @@ class Net(nn.Module):
     def loss_func(self, s, a, v_t):
         self.train()
         logits, values = self.forward(s)
-        td = v_t.cuda() - values
+        td = v_t - values
         c_loss = td.pow(2)
 
         probs = F.softmax(logits, dim=1)
         m = self.distribution(probs)
-        exp_v = m.log_prob(a.cuda()) * td.detach().squeeze()
+        exp_v = m.log_prob(a) * td.detach().squeeze()
         a_loss = -exp_v
         total_loss = (c_loss + a_loss).mean()
 

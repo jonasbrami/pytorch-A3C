@@ -8,9 +8,9 @@ import numpy as np
 import time
 
 use_gpu = lambda x=True: torch.set_default_tensor_type(torch.cuda.FloatTensor 
-                                             if torch.cuda.is_available() and x 
+                                             if torch.cuda.is_available() and x and False
                                              else torch.FloatTensor)
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() and False else 'cpu')
 
 use_gpu()
 
